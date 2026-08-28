@@ -1,0 +1,46 @@
+services:
+  ctf:
+    build:
+      context: .
+      args:
+        CTF_SEED: ""
+    expose:
+      - "3000"                       # nội bộ — backend chấm điểm (không mở ra ngoài)
+    environment:
+      ADMIN_USER: "admin"
+      ADMIN_PASS: "change-me"        # ĐỔI trước khi mở public
+      SHARE_FILES_DIR: "/shared"
+    volumes:
+      - ctf-data:/app/data
+      - ctf-files:/shared
+    restart: unless-stopped
+
+  # DUY NHẤT một trang: terminal. Học viên & admin đều làm trong đây (lệnh ctf / ctf admin).
+  shell:
+    build: ./shell
+    ports:
+      - "7681:7681"
+    environment:
+      CTF_API: "http://ctf:3000"
+      # TTYD_CRED: "ctf:letmein"
+    volumes:
+      - ctf-files:/srv/challenges:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 512m
+    cpus: 1.0
+    depends_on:
+      - ctf
+    restart: unless-stopped
+
+volumes:
+  ctf-data:
+  ctf-files:

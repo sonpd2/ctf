@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+# Giao diện CTF trong terminal. Nói chuyện với backend chấm điểm.
+import os, sys, re, json, time, getpass, urllib.request, urllib.error
+
+API = os.environ.get("CTF_API", "http://ctf:3000").rstrip("/")
+SESS = os.path.join(os.path.expanduser("~"), ".ctf_session")
+C = {"r":"\033[0m","b":"\033[1m","dim":"\033[2m","grn":"\033[32m","red":"\033[31m","yel":"\033[33m","cyn":"\033[36m","mag":"\033[35m"}
+def c(k,s): return C[k]+s+C["r"]
+
+def _req(method, path, data=None, headers=None):
+    body = json.dumps(data).encode() if data is not None else None
+    h = {"Content-Type":"application/json"}
+    if headers: h.update(headers)
+    req = urllib.request.Request(API+path, data=body, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.load(e)
+        except Exception: return e.code, {}
+    except Exception as ex:
+        print(c("red","Không kết nối được máy chủ CTF (%s): %s" % (API, ex))); sys.exit(1)
+
+def slug(n):
+    s = re.sub(r'[^a-z0-9]+','-', n.lower()).strip('-')[:40]
+    return s or "anon"
+def load():
+    try: return json.load(open(SESS))
+    except Exception: return {}
+def save(d):
+    open(SESS,"w").write(json.dumps(d));
+    try: os.chmod(SESS, 0o600)
+    except Exception: pass
+
+def need_login():
+    s = load()
+    if not s.get("token"):
+        print(c("yel","Bạn chưa đăng nhập. Chạy: ")+c("b","ctf login <callsign>")); sys.exit(1)
+    return s
+
+def cmd_register(args):
+    if not args: print("Dùng: ctf register <callsign>"); return
+    name = args[0]; pw = getpass.getpass("Mật khẩu mới: ")
+    st, d = _req("POST","/api/register",{"name":name,"password":pw})
+    if st == 200: print(c("grn","✓ Đăng ký thành công. Chờ admin duyệt rồi: ")+c("b","ctf login "+name))
+    else: print(c("red","✗ "+d.get("message","Đăng ký thất bại.")))
+
+def cmd_login(args):
+    if not args: print("Dùng: ctf login <callsign>"); return
+    name = args[0]; pw = getpass.getpass("Mật khẩu: ")
+    st, d = _req("POST","/api/login",{"name":name,"password":pw})
+    if st == 200 and d.get("token"):
+        save({"name":d["player"]["name"],"token":d["token"]})
+        print(c("grn","✓ Đăng nhập OK. Gõ ")+c("b","ctf")+c("grn"," để xem nhiệm vụ."))
+    else:
+        print(c("red","✗ "+d.get("message","Đăng nhập thất bại.")))
+
+def cmd_logout(_):
+    try: os.remove(SESS)
+    except Exception: pass
+    print("Đã đăng xuất.")
+
+def _mystate():
+    s = load()
+    if not s.get("name"): return {}, {}
+    st, d = _req("GET","/api/player/"+slug(s["name"]))
+    return s, (d if st==200 else {})
+
+def cmd_list(_):
+    st, d = _req("GET","/api/objectives")
+    if st != 200: print(c("red","Không lấy được nhiệm vụ.")); return
+    s, me = _mystate()
+    solves = me.get("solves",{}) or {}; attempts = me.get("attempts",{}) or {}
+    print()
+    print(c("red","  ┌─ INCIDENT #IR ───────────────────────────────┐"))
+    story = re.sub("<[^>]+>","", d.get("story",""))
+    for line in _wrap(story, 62): print(c("dim","  │ ")+line)
+    print(c("red","  └──────────────────────────────────────────────┘"))
+    print()
+    tot = 0; got = 0
+    for o in d["objectives"]:
+        tot += 1
+        oid = o["id"]
+        if oid in solves:
+            got += 1; badge = c("grn","✔ SOLVED  ")
+        elif attempts.get(oid,0) >= 3:
+            badge = c("red","✗ LOCKED  ")
+        else:
+            left = 3 - attempts.get(oid,0)
+            badge = c("yel","○ %d thử  " % left)
+        print("  %s %s  %s %s" % (c("b",oid.ljust(3)), badge, c("cyn","%4d" % o["points"]), o["title"]))
+    print()
+    print("  Tiến độ: %s/%s nhiệm vụ.  Xem chi tiết: %s  ·  Nộp: %s" %
+          (c("b",str(got)), c("b",str(tot)), c("b","ctf show <id>"), c("b","ctf submit <id> <đáp án>")))
+    print()
+
+def _wrap(t, w):
+    out=[]; line=""
+    for word in t.split():
+        if len(line)+len(word)+1 > w: out.append(line.ljust(w)); line=word
+        else: line = (line+" "+word).strip()
+    if line: out.append(line.ljust(w))
+    return out or [" "*w]
+
+def cmd_show(args):
+    if not args: print("Dùng: ctf show <id>"); return
+    oid = args[0].upper()
+    st, d = _req("GET","/api/objectives")
+    o = next((x for x in d.get("objectives",[]) if x["id"]==oid), None)
+    if not o: print(c("red","Không có nhiệm vụ "+oid)); return
+    print()
+    print("  "+c("b",o["id"])+"  "+o["title"]+"   "+c("cyn",str(o["points"])+" điểm")+"  "+c("dim",o["diff"]))
+    print()
+    for line in _wrap(re.sub("<[^>]+>","",o["brief"]), 68): print("  "+line.strip())
+    print()
+    print(c("dim","  Điều tra ~/incident rồi: ")+c("b","ctf submit "+oid+" <đáp án>"))
+    print()
+
+def cmd_submit(args):
+    if len(args) < 2: print("Dùng: ctf submit <id> <đáp án>"); return
+    s = need_login()
+    oid = args[0].upper(); ans = " ".join(args[1:])
+    st, d = _req("POST","/api/submit",{"name":s["name"],"token":s["token"],"id":oid,"answer":ans})
+    stt = d.get("status"); msg = d.get("message","")
+    if stt == "solved":   print(c("grn","  ✔ "+msg))
+    elif stt == "already":print(c("cyn","  • "+msg))
+    elif stt == "locked": print(c("red","  ✗ "+msg))
+    elif stt == "wrong":  print(c("yel","  ✗ "+msg))
+    else:                 print(c("red","  ✗ "+(msg or "Lỗi.")))
+
+def cmd_score(_):
+    s, me = _mystate()
+    if not me: print(c("yel","Chưa đăng nhập hoặc chưa được duyệt.")); return
+    st, d = _req("GET","/api/objectives")
+    pts = {o["id"]:o["points"] for o in d.get("objectives",[])}
+    score = sum(pts.get(k,0) for k in (me.get("solves",{}) or {}))
+    print("  %s — điểm %s, giải %s nhiệm vụ." %
+          (c("b",s.get("name","?")), c("grn",str(score)), c("b",str(len(me.get("solves",{}) or {})))))
+
+def _render_board():
+    st, players = _req("GET","/api/players")
+    sto, d = _req("GET","/api/objectives")
+    pts = {o["id"]:o["points"] for o in d.get("objectives",[])}
+    total = len(d.get("objectives",[]))
+    rows=[]
+    for p in players or []:
+        sc = sum(pts.get(k,0) for k in (p.get("solves",{}) or {}))
+        t = max([v.get("elapsedMs",0) for v in (p.get("solves",{}) or {}).values()] or [0])
+        rows.append((sc, t, p["name"], len(p.get("solves",{}) or {})))
+    rows.sort(key=lambda r:(-r[0], r[1], r[2]))
+    me = load().get("name")
+    out=[c("b","   #  CALLSIGN               GIẢI   ĐIỂM")]
+    if not rows: out.append(c("dim","   (chưa có ai ghi điểm)"))
+    for i,(sc,t,nm,ns) in enumerate(rows,1):
+        mark = c("yel"," ← bạn") if nm==me else ""
+        pos = c("yel","%2d"%i) if i<=3 else "  %d"%i if i<10 else "%2d"%i
+        out.append("  %s  %-20s %2d/%d  %s%s" % (pos, nm[:20], ns, total, c("grn","%5d"%sc), mark))
+    return "\n".join(out)
+
+def cmd_board(args):
+    live = bool(args) and args[0] in ("--live","-l","live","watch","-w")
+    try:
+        while True:
+            body = _render_board()
+            if live: sys.stdout.write("\033[2J\033[H")
+            print()
+            hdr = c("red","  ══ BẢNG XẾP HẠNG — INCIDENT CTF ══")
+            if live: hdr += "   " + c("dim","cập nhật "+time.strftime("%H:%M:%S"))
+            print(hdr); print()
+            print(body); print()
+            if not live: break
+            print(c("dim","  live · tự cập nhật mỗi 3s · Ctrl+C để thoát"))
+            time.sleep(3)
+    except KeyboardInterrupt:
+        print()
+
+def cmd_watch(args): cmd_board(["--live"])
+
+def cmd_help(_):
+    print("""
+  ctf                     xem briefing + danh sách nhiệm vụ
+  ctf show <id>           xem một câu hỏi
+  ctf submit <id> <đáp>   nộp đáp án
+  ctf score               điểm của bạn
+  ctf board               bảng xếp hạng (thêm --live để tự cập nhật)
+  ctf watch               bảng xếp hạng LIVE (chiếu màn hình)
+  ctf register <name>     đăng ký (chờ admin duyệt)
+  ctf login <name>        đăng nhập
+  ctf logout              đăng xuất
+
+  Điều tra ổ tang vật trong ~/incident bằng lệnh Linux bình thường.
+""")
+
+ADMF = os.path.join(os.path.expanduser("~"), ".ctf_admin")
+def _atok():
+    try: return json.load(open(ADMF)).get("token")
+    except Exception: return None
+def cmd_admin(args):
+    if not args:
+        print("  ctf admin login | pending | list | approve <tên> | delete <tên> | reset"); return
+    sub = args[0]; rest = args[1:]
+    if sub == "login":
+        user = rest[0] if rest else input("Admin user [admin]: ").strip() or "admin"
+        pw = getpass.getpass("Admin pass: ")
+        st, d = _req("POST","/api/admin/login",{"user":user,"pass":pw})
+        if st == 200 and d.get("token"):
+            open(ADMF,"w").write(json.dumps({"token":d["token"]}))
+            try: os.chmod(ADMF,0o600)
+            except Exception: pass
+            print(c("grn","✓ Admin OK."))
+        else: print(c("red","✗ "+d.get("message","Sai tài khoản admin.")))
+        return
+    tok = _atok()
+    if not tok: print(c("yel","Chưa đăng nhập admin: ")+c("b","ctf admin login")); return
+    H = {"x-admin-token":tok}
+    if sub in ("pending","list"):
+        st, rows = _req("GET","/api/admin/list",None,H)
+        if st != 200: print(c("red","Phiên admin hết hạn — ctf admin login")); return
+        if sub == "pending": rows = [r for r in rows if r.get("status")=="pending"]
+        if not rows: print("  (trống)"); return
+        for r in rows:
+            print("  %-20s %-9s %s♦" % (r["name"], c("yel",r["status"]) if r["status"]=="pending" else c("grn",r["status"]), r.get("solved",0)))
+    elif sub == "approve" and rest:
+        st,_ = _req("POST","/api/admin/approve",{"name":rest[0]},H); print(c("grn","✓ đã duyệt "+rest[0]) if st==200 else c("red","✗ lỗi"))
+    elif sub == "delete" and rest:
+        st,_ = _req("POST","/api/admin/delete",{"name":rest[0]},H); print(c("grn","✓ đã xóa "+rest[0]) if st==200 else c("red","✗ lỗi"))
+    elif sub == "reset":
+        if input("Xóa TOÀN BỘ người chơi? gõ YES: ").strip()=="YES":
+            st,d = _req("POST","/api/reset",{},H); print(c("grn","✓ đã reset") if st==200 else c("red","✗ "+d.get("message","lỗi")))
+        else: print("hủy.")
+    else:
+        print("  ctf admin login | pending | list | approve <tên> | delete <tên> | reset")
+
+CMDS = {"register":cmd_register,"login":cmd_login,"logout":cmd_logout,"list":cmd_list,
+        "show":cmd_show,"submit":cmd_submit,"score":cmd_score,"board":cmd_board,"help":cmd_help,
+        "ls":cmd_list,"admin":cmd_admin,"watch":cmd_watch}
+
+def main():
+    argv = sys.argv[1:]
+    if not argv: return cmd_list([])
+    cmd = argv[0].lower()
+    fn = CMDS.get(cmd)
+    if not fn: print(c("red","Lệnh không rõ: "+cmd)); return cmd_help([])
+    fn(argv[1:])
+
+if __name__ == "__main__":
+    try: main()
+    except KeyboardInterrupt: print()
