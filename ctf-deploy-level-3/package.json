@@ -1,0 +1,12 @@
+{
+  "name": "linux-security-ctf-l3",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node gen.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
