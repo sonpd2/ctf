@@ -23,7 +23,14 @@ const cyrb53 = (str, seed = 0) => {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507); h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 };
-const norm = (s) => { let x = String(s).trim().toLowerCase().replace(/\s+/g, ""); const m = x.match(/^lsec\{(.*)\}$/); return m ? m[1] : x; };
+const norm = (s) => {
+  let x = String(s).trim().toLowerCase().replace(/\s+/g, "");
+  // bỏ nháy bọc do shell/copy: 'a|b|c' hoặc "a|b|c"
+  if ((x.startsWith("'") && x.endsWith("'")) || (x.startsWith('"') && x.endsWith('"'))) x = x.slice(1, -1);
+  const m = x.match(/^lsec\{(.*)\}$/);
+  return m ? m[1] : x;
+};
+
 const slug = (n) => String(n).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "anon";
 const okSlug = (s) => /^[a-z0-9-]{1,40}$/.test(s);
 

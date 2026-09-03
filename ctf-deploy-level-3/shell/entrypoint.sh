@@ -40,11 +40,32 @@ else
   echo "entrypoint: overlay $MOUNTED vị trí OK." >&2
 fi
 
-# Listen :80 → service web (học viên tự ss/netstat, không spoiler URL)
+# Listen local → web. setsid: không chết khi shell exec → ttyd.
+# Cổng 80 cần CAP_NET_BIND_SERVICE; nếu fail thì fallback 8080.
 UPSTREAM="${WEB_UPSTREAM:-web:80}"
-if command -v socat >/dev/null 2>&1; then
-  socat TCP-LISTEN:80,fork,reuseaddr TCP:"$UPSTREAM" >/dev/null 2>&1 &
-  echo "entrypoint: local listener ready." >&2
+start_proxy() {
+  local port="$1"
+  if ! command -v socat >/dev/null 2>&1; then
+    echo "(!) entrypoint: không có socat" >&2
+    return 1
+  fi
+  # thử bind
+  if ! setsid socat TCP-LISTEN:"${port}",fork,reuseaddr,bind=0.0.0.0 TCP:"${UPSTREAM}" \
+      </dev/null >/tmp/socat-${port}.log 2>&1 &
+  then
+    return 1
+  fi
+  sleep 0.3
+  if ss -tln 2>/dev/null | grep -qE ":${port}\\b" || netstat -tln 2>/dev/null | grep -qE ":${port}\\b"; then
+    echo "entrypoint: proxy :${port} → ${UPSTREAM} OK (pid $!)" >&2
+    return 0
+  fi
+  echo "(!) entrypoint: không listen được :${port} — xem /tmp/socat-${port}.log" >&2
+  return 1
+}
+
+if ! start_proxy 80; then
+  start_proxy 8080 || true
 fi
 
 exec "$@"
